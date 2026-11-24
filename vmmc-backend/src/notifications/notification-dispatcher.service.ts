@@ -86,7 +86,7 @@ export class NotificationDispatcherService {
     const { data, error } = await this.supabaseService
       .getClient()
       .from('notifications')
-      .select('id, channel, status, sent_at, created_at, events!inner ( event_type, event_subtype, severity, message )')
+      .select('id, channel, status, sent_at, created_at, read_at, events!inner ( event_type, event_subtype, severity, message )')
       .eq('employee_id', employeeId)
       .eq('channel', 'IN_APP')
       .order('created_at', { ascending: false })
@@ -100,12 +100,29 @@ export class NotificationDispatcherService {
         status: row.status,
         sentAt: row.sent_at,
         createdAt: row.created_at,
+        readAt: row.read_at,
         eventType: event?.event_type,
         eventSubtype: event?.event_subtype,
         severity: event?.severity,
         message: event?.message,
       };
     });
+  }
+
+  /** Marks only the caller's in-app notifications as read. Delivery outcomes remain unchanged. */
+  async markMineRead(employeeId: string) {
+    const readAt = new Date().toISOString();
+    const { data, error } = await this.supabaseService
+      .getClient()
+      .from('notifications')
+      .update({ read_at: readAt })
+      .eq('employee_id', employeeId)
+      .eq('channel', 'IN_APP')
+      .is('read_at', null)
+      .select('id');
+    if (error) throw error;
+
+    return { readAt, markedRead: data?.length ?? 0 };
   }
 
   private async dispatchOne(

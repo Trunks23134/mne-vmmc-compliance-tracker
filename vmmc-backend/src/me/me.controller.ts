@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -12,6 +12,7 @@ import { NotificationDispatcherService } from '../notifications/notification-dis
 import { UploadSignatureDto } from '../signatures/dto/upload-signature.dto';
 import { SignaturesService } from '../signatures/signatures.service';
 import { ActivityService } from './activity.service';
+import { ActivityQueryDto } from './dto/activity-query.dto';
 import { CreateDeviceDto } from './dto/create-device.dto';
 import { UpdatePasswordDto } from './dto/update-password.dto';
 import { UpdatePinDto } from './dto/update-pin.dto';
@@ -64,6 +65,11 @@ export class MeController {
     return this.notificationDispatcherService.listMine(employee.id);
   }
 
+  @Patch('notifications/read')
+  markMyNotificationsRead(@CurrentUser() employee: EmployeeContext) {
+    return this.notificationDispatcherService.markMineRead(employee.id);
+  }
+
   @Get('signature')
   @Roles('ADMIN')
   getSignature(@CurrentUser() employee: EmployeeContext) {
@@ -114,8 +120,8 @@ export class MeController {
   }
 
   @Get('activity-logs')
-  getActivityLogs(@CurrentUser() employee: EmployeeContext) {
-    return this.activityService.listActivityLogs(employee);
+  getActivityLogs(@CurrentUser() employee: EmployeeContext, @Query() query: ActivityQueryDto) {
+    return this.activityService.listActivityLogs(employee, query.limit, query.beforeTimestamp, query.beforeId);
   }
 
   @Get('login-history')

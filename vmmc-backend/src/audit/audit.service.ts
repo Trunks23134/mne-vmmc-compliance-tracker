@@ -21,17 +21,22 @@ export class AuditService {
   constructor(private readonly supabaseService: SupabaseService) {}
 
   async log(params: AuditLogParams) {
-    const { error } = await this.supabaseService.getClient().from('audit_logs').insert({
-      actor_id: params.actorId,
-      action: params.action,
-      entity_type: params.entityType ?? null,
-      entity_id: params.entityId ?? null,
-      ip_address: params.ipAddress ?? null,
-      user_agent: params.userAgent ?? null,
-      location: params.location ?? null,
-      before: params.before ?? null,
-      after: params.after ?? null,
-    });
-    if (error) this.logger.error(`Failed to write audit log (${params.action}): ${error.message}`);
+    try {
+      const { error } = await this.supabaseService.getClient().from('audit_logs').insert({
+        actor_id: params.actorId,
+        action: params.action,
+        entity_type: params.entityType ?? null,
+        entity_id: params.entityId ?? null,
+        ip_address: params.ipAddress ?? null,
+        user_agent: params.userAgent ?? null,
+        location: params.location ?? null,
+        before: params.before ?? null,
+        after: params.after ?? null,
+      });
+      if (error) this.logger.error(`Failed to write audit log (${params.action}): ${error.message}`);
+    } catch (error) {
+      const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+      this.logger.error(`Failed to write audit log (${params.action}): ${detail}`);
+    }
   }
 }

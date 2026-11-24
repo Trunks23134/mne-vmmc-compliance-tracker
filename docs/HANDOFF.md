@@ -2,7 +2,7 @@
 
 **Purpose of this file:** a snapshot of *where things stand right now*, for the team picking this up cold or resuming after a break. Unlike its sibling docs in this folder, this file is expected to go stale — treat it as a checkpoint, not permanent documentation. Update it (or just rewrite it) the next time there's a meaningful state change worth handing off. (This should happen automatically — see §9.)
 
-Last updated: 2026-11-07.
+Last updated: 2026-11-24.
 
 ---
 
@@ -15,6 +15,12 @@ A capstone project: a TB DOTS (Directly Observed Treatment, Short-course) pulmon
 ## 2 · Current status: feature-complete, in polish/iteration mode
 
 The original 12-phase build plan (`VMMC_TBDOTS_BuildSpec.md`) is done — every phase shipped, verified live (curl + Playwright), no known mock data left unflagged. Since then there have been six follow-up passes closing gaps, fixing real bugs found by actually using the app, and building out proper testing infrastructure (see `docs/SYSTEM_ARCHITECTURE.md` §7 for the full history). Nothing is mid-implementation right now — the repo is in a stable, working state. See §6 for what's actually left to do.
+
+The staff Activity Logs modal now expands to the available viewport width (up to 1600px) while keeping 24px side gutters; “View all” pages through the complete personal history in the same Timestamp, User, Role, Action, and Resource table as the Profile preview. Its heading and close control stay visible while the entries scroll, and Escape closes the dialog. The Profile page’s title and audit-trail cards use the same flat, bordered card style as the surrounding sections instead of stronger shadows that made them look raised.
+
+The audit feeds now retain every row written to `audit_logs` instead of filtering background reads or merging bursts. Both staff and admin feeds use stable timestamp/ID cursors, load additional rows on demand, and the staff CSV export fetches the complete personal history. Authenticated API writes are awaited before successful responses; handler failures and role-based denials are also recorded, and login/logout/signup/password events are explicitly audited. Audit writes never include request bodies. This covers server-observed authenticated API activity and enumerated auth events—not every frontend-only click or anonymous request.
+
+Notification badges now count unread in-app notifications; opening the bell preview or Notifications page marks them read and refreshes the shared header badge. This adds `notifications.read_at` through `vmmc-backend/supabase/migrations/20261124000000_notification_read_state.sql`; apply that migration to each Supabase environment before deploying the backend/frontend changes.
 
 The public `/privacy` page and app-wide essential-cookie notice are implemented; account signup requires a privacy-notice acknowledgment in both the UI and backend API. This acknowledgment is not persisted as a legal-consent record. The notice describes current system behavior, but the official controller identity, lawful basis, retention schedule, and privacy-office contact must be confirmed by VMMC's Data Protection Officer before treating it as final policy.
 
@@ -38,7 +44,7 @@ Two custom commands exist for this exact workflow: **`/dev-restart`** (kill stal
 Three layers, two of them per-repo and one consolidated:
 
 ```bash
-cd "vmmc-backend" && npm test    # Jest, 232 unit tests
+cd "vmmc-backend" && npm test    # Jest, 223 unit tests
 cd "vmmc-frontend" && npm test   # Vitest, 109 tests, pure src/lib/* logic only (no jsdom/rendering)
 npm run test:e2e                 # from the repo root — Playwright, e2e/api/ + e2e/ui/, both repos
 ```

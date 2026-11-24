@@ -1,5 +1,5 @@
-import { CallHandler, ExecutionContext, ForbiddenException, Injectable, NestInterceptor } from '@nestjs/common';
-import { Observable, catchError, tap, throwError } from 'rxjs';
+import { CallHandler, ExecutionContext, ForbiddenException, Injectable, Logger, NestInterceptor } from '@nestjs/common';
+import { Observable, catchError, concatMap, from, map, throwError } from 'rxjs';
 import { RequestWithEmployee } from '../auth/types/request-with-employee';
 import { AuditService } from './audit.service';
 
@@ -42,6 +42,8 @@ function actionForMethod(method: string): string {
  */
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(AuditInterceptor.name);
+
   constructor(private readonly auditService: AuditService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
@@ -61,17 +63,24 @@ export class AuditInterceptor implements NestInterceptor {
     const action = actionForMethod(request.method);
 
     return next.handle().pipe(
-      tap(() => {
-        this.auditService.log({ actorId, action, entityType, entityId, ipAddress, userAgent }).catch(() => {});
-      }),
+      concatMap((response) =>
+        from(this.writeAudit({ actorId, action, entityType, entityId, ipAddress, userAgent })).pipe(map(() => response)),
+      ),
       catchError((err: unknown) => {
-        if (err instanceof ForbiddenException) {
-          this.auditService
-            .log({ actorId, action: 'ACCESS_DENIED', entityType, entityId, ipAddress, userAgent })
-            .catch(() => {});
-        }
-        return throwError(() => err);
+        const failedAction = err instanceof ForbiddenException ? 'ACCESS_DENIED' : `FAILED_${action}`;
+        return from(this.writeAudit({ actorId, action: failedAction, entityType, entityId, ipAddress, userAgent })).pipe(
+          concatMap(() => throwError(() => err)),
+        );
       }),
     );
+  }
+
+  private async writeAudit(params: Parameters<AuditService['log']>[0]) {
+    try {
+      await this.auditService.log(params);
+    } catch (error) {
+      const detail = error instanceof Error ? error.stack ?? error.message : String(error);
+      this.logger.error(`Audit write failed for ${params.action}: ${detail}`);
+    }
   }
 }

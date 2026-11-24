@@ -10,6 +10,7 @@ import { SignupDto } from './dto/signup.dto';
 import { VerifyLoginOtpDto } from './dto/verify-login-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { SupabaseAuthGuard } from './guards/supabase-auth.guard';
+import type { RequestWithEmployee } from './types/request-with-employee';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -84,15 +85,18 @@ export class AuthController {
   @HttpCode(200)
   @ApiBearerAuth('access-token')
   @UseGuards(SupabaseAuthGuard)
-  logout(
-    @Req() req: Request,
+  async logout(
+    @Req() req: RequestWithEmployee,
     @Headers('authorization') authorization: string,
     @Res({ passthrough: true }) res: Response,
   ) {
     const token =
       authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : this.extractTokenFromCookie(req.headers.cookie);
     if (token) {
-      this.authService.logout(token);
+      await this.authService.logout(token, req.employee.id, {
+        ipAddress: req.ip ?? null,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
     }
     res.clearCookie('vmmc_session', { path: '/', httpOnly: true, sameSite: 'lax' });
     return { ok: true };

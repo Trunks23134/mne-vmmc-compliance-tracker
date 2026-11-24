@@ -16,7 +16,7 @@ export interface ChainResult {
 }
 
 const CHAIN_METHODS = [
-  'select', 'eq', 'neq', 'order', 'limit', 'not', 'in', 'gte', 'lte', 'gt', 'lt', 'is',
+  'select', 'eq', 'neq', 'order', 'limit', 'range', 'or', 'not', 'in', 'gte', 'lte', 'gt', 'lt', 'is',
   'update', 'insert', 'upsert', 'delete', 'returns',
 ] as const;
 

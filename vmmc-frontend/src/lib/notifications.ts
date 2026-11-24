@@ -3,11 +3,14 @@ export interface NotificationItem {
   status: string
   sentAt: string | null
   createdAt: string
+  readAt: string | null
   eventType: 'INFORMATIONAL' | 'WARNING' | 'EXCEPTION'
   eventSubtype: string
   severity: number
   message: string
 }
+
+export const NOTIFICATIONS_READ_EVENT = 'vmmc:notifications-read'
 
 export function notificationStyle(eventType: NotificationItem['eventType']) {
   if (eventType === 'EXCEPTION') return { bg: '#fff5f5', border: '#feb2b2', color: '#c53030' }

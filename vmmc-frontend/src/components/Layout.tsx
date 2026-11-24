@@ -1,15 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import VmmcSeal from './VmmcSeal'
 import { Home, ClipboardList, UserCircle, ChevronDown, Menu, X, Folder, Bell, User, Users, FileText, LogOut, TrendingUp, CheckSquare, Briefcase, CircleUserRound } from 'lucide-react'
 import { getRole, getUser, getInitials, logout, USER_UPDATED_EVENT } from '@/lib/auth'
 import { api } from '@/lib/api'
-import { notificationStyle, timeAgo, type NotificationItem } from '@/lib/notifications'
+import { NOTIFICATIONS_READ_EVENT, notificationStyle, timeAgo, type NotificationItem } from '@/lib/notifications'
 
-function NotificationPanel({ notifications, onViewAll }: { notifications: NotificationItem[]; onViewAll: () => void }) {
+function NotificationPanel({ notifications, onViewAll, error }: { notifications: NotificationItem[]; onViewAll: () => void; error: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: -10, scale: 0.96 }}
@@ -21,6 +21,7 @@ function NotificationPanel({ notifications, onViewAll }: { notifications: Notifi
       <div style={{ fontSize: 12, fontWeight: 800, color: '#5f6b7d', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '10px 12px 6px' }}>
         Notifications
       </div>
+      {error && <div role="alert" style={{ padding: '8px 12px', fontSize: 12, color: '#b42318' }}>{error}</div>}
       {notifications.length === 0 ? (
         <div style={{ padding: '20px 12px', fontSize: 13, color: '#5f6b7d', textAlign: 'center' }}>No notifications yet.</div>
       ) : (
@@ -89,9 +90,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [notifications, setNotifications] = useState<NotificationItem[]>([])
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notificationReadError, setNotificationReadError] = useState('')
   const [fullName, setFullName] = useState('')
   const [jobTitle, setJobTitle] = useState('')
   const [employeeId, setEmployeeId] = useState('')
+  const notificationRequest = useRef(0)
 
   useEffect(() => {
     const readUser = () => {
@@ -108,8 +111,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   }, [pathname])
 
   useEffect(() => {
-    api.get<NotificationItem[]>('/me/notifications').then(setNotifications).catch(() => {})
-  }, [])
+    let active = true
+    const refreshNotifications = () => {
+      const request = ++notificationRequest.current
+      api.get<NotificationItem[]>('/me/notifications')
+        .then(data => {
+          if (active && request === notificationRequest.current) setNotifications(data ?? [])
+        })
+        .catch(() => {})
+    }
+
+    refreshNotifications()
+    window.addEventListener(NOTIFICATIONS_READ_EVENT, refreshNotifications)
+    return () => {
+      active = false
+      window.removeEventListener(NOTIFICATIONS_READ_EVENT, refreshNotifications)
+    }
+  }, [pathname])
 
   useEffect(() => {
     if (!profileMenuOpen) return
@@ -134,6 +152,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     setNotificationsOpen(false)
     goTo('/notifications')
   }
+  const markNotificationsRead = async () => {
+    if (!notifications.some(notification => !notification.readAt)) return
+    try {
+      const result = await api.patch<{ readAt: string }>('/me/notifications/read')
+      setNotifications(current => current.map(notification => ({ ...notification, readAt: notification.readAt ?? result.readAt })))
+      setNotificationReadError('')
+      window.dispatchEvent(new Event(NOTIFICATIONS_READ_EVENT))
+    } catch {
+      setNotificationReadError('Could not mark notifications as read. Try again on the Notifications page.')
+    }
+  }
+  const toggleNotifications = () => {
+    if (!notificationsOpen) void markNotificationsRead()
+    setNotificationsOpen(open => !open)
+  }
+  const unreadNotificationCount = notifications.filter(notification => !notification.readAt).length
 
   const handleLogout = () => {
     setProfileMenuOpen(false)
@@ -163,21 +197,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </div>
         <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
           <button
-            onClick={() => setNotificationsOpen(v => !v)}
-            aria-label="Notifications"
+            onClick={toggleNotifications}
+            aria-label={unreadNotificationCount > 0 ? `Notifications (${unreadNotificationCount} unread)` : 'Notifications'}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1f3151', width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: -4 }}
           >
             <span style={{ position: 'relative', display: 'flex' }}>
               <Bell size={20} />
-              {notifications.length > 0 && (
+              {unreadNotificationCount > 0 && (
                 <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 999, background: '#c0262d', color: '#fff', fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px' }}>
-                  {notifications.length > 9 ? '9+' : notifications.length}
+                  {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
                 </span>
               )}
             </span>
           </button>
           <AnimatePresence>
-            {notificationsOpen && <NotificationPanel notifications={notifications} onViewAll={viewAllNotifications} />}
+            {notificationsOpen && <NotificationPanel notifications={notifications} onViewAll={viewAllNotifications} error={notificationReadError} />}
           </AnimatePresence>
         </div>
       </header>
@@ -239,21 +273,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
             <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
               <button
-                onClick={() => setNotificationsOpen(v => !v)}
-                aria-label={notifications.length > 0 ? `Notifications (${notifications.length})` : 'Notifications'}
+                onClick={toggleNotifications}
+                aria-label={unreadNotificationCount > 0 ? `Notifications (${unreadNotificationCount} unread)` : 'Notifications'}
                 aria-expanded={notificationsOpen}
                 className="w-10 h-10 min-[1440px]:w-11 min-[1440px]:h-11"
                 style={{ position: 'relative', background: '#173d32', border: '1.5px solid #097542', borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#fff' }}
               >
                 <Bell size={16} />
-                {notifications.length > 0 && (
+                {unreadNotificationCount > 0 && (
                   <span style={{ position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 999, background: '#c0262d', color: '#fff', fontSize: 12, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 3px', border: '2px solid #1b2a47' }}>
-                    {notifications.length > 9 ? '9+' : notifications.length}
+                    {unreadNotificationCount > 9 ? '9+' : unreadNotificationCount}
                   </span>
                 )}
               </button>
               <AnimatePresence>
-                {notificationsOpen && <NotificationPanel notifications={notifications} onViewAll={viewAllNotifications} />}
+                {notificationsOpen && <NotificationPanel notifications={notifications} onViewAll={viewAllNotifications} error={notificationReadError} />}
               </AnimatePresence>
             </div>
 

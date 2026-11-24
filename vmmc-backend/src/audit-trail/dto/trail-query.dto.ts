@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsDateString, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import { MAX_TRAIL_LIMIT } from '../audit-trail.service';
 
 export class TrailQueryDto {
@@ -11,4 +11,14 @@ export class TrailQueryDto {
   @Min(1)
   @Max(MAX_TRAIL_LIMIT)
   limit?: number;
+
+  @ApiPropertyOptional({ description: 'Timestamp cursor for the last returned entry.' })
+  @IsOptional()
+  @IsDateString()
+  beforeTimestamp?: string;
+
+  @ApiPropertyOptional({ description: 'ID cursor paired with beforeTimestamp.' })
+  @IsOptional()
+  @IsUUID()
+  beforeId?: string;
 }

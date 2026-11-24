@@ -338,6 +338,25 @@
         ]
       }
     },
+    "/api/me/notifications/read": {
+      "patch": {
+        "operationId": "MeController_markMyNotificationsRead",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "access-token": []
+          }
+        ],
+        "tags": [
+          "me"
+        ]
+      }
+    },
     "/api/me/signature": {
       "get": {
         "operationId": "MeController_getSignature",
@@ -556,7 +575,37 @@
     "/api/me/activity-logs": {
       "get": {
         "operationId": "MeController_getActivityLogs",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Number of audit entries to return.",
+            "schema": {
+              "maximum": 50,
+              "default": 30,
+              "type": "number"
+            }
+          },
+          {
+            "name": "beforeTimestamp",
+            "required": false,
+            "in": "query",
+            "description": "Timestamp cursor for the last returned entry.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "beforeId",
+            "required": false,
+            "in": "query",
+            "description": "ID cursor paired with beforeTimestamp.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": ""
@@ -1619,6 +1668,24 @@
               "maximum": 50,
               "default": 25,
               "type": "number"
+            }
+          },
+          {
+            "name": "beforeTimestamp",
+            "required": false,
+            "in": "query",
+            "description": "Timestamp cursor for the last returned entry.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "beforeId",
+            "required": false,
+            "in": "query",
+            "description": "ID cursor paired with beforeTimestamp.",
+            "schema": {
+              "type": "string"
             }
           }
         ],

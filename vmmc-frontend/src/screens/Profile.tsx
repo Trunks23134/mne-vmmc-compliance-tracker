@@ -7,7 +7,7 @@ import { Lock, Smartphone, Shield, Activity, Check, User, LogOut, Clock, Chevron
 import { fadeRise } from '@/lib/motion'
 import { logout, getRole, getPreciseRole, getInitials, updateUser, type PreciseRole } from '@/lib/auth'
 import { api, ApiError, ApiConnectionError } from '@/lib/api'
-import { formatBirthDate, calculateAge, formatLogTime, toCsv } from '@/lib/format'
+import { formatBirthDate, calculateAge, toCsv } from '@/lib/format'
 import { PH_COUNTRY_CODE, isValidPhMobile, toE164, toNationalDigits } from '@/lib/phone'
 
 function apiErrorMessage(err: unknown, fallback: string) {
@@ -17,9 +17,13 @@ function apiErrorMessage(err: unknown, fallback: string) {
 }
 
 interface ActivityLogEntry { title: string; time: string; ip: string | null; action?: string; entityType?: string | null; entityRef?: string | null }
+interface ActivityLogCursor { timestamp: string; id: string }
+interface ActivityLogPage { items: ActivityLogEntry[]; nextCursor: ActivityLogCursor | null }
+interface AuditTrailPage { items: AuditTrailEntry[]; nextCursor: ActivityLogCursor | null }
 
 const AUDIT_ROWS_SHOWN = 3
-const ADMIN_TRAIL_STEP = 5
+const ACTIVITY_PAGE_SIZE = 30
+const ADMIN_TRAIL_PAGE_SIZE = 25
 
 /** One row of the admin's system-wide audit trail (GET /audit-trail). */
 interface AuditTrailEntry {
@@ -178,6 +182,9 @@ export default function Profile() {
   const [adminView, setAdminView] = useState<AdminView | null>(null)
 
   const [activityLogs, setActivityLogs] = useState<ActivityLogEntry[]>([])
+  const [activityCursor, setActivityCursor] = useState<ActivityLogCursor | null>(null)
+  const [activityLoadingMore, setActivityLoadingMore] = useState(false)
+  const [activityError, setActivityError] = useState('')
   const [loginHistoryEntries, setLoginHistoryEntries] = useState<LoginHistoryEntry[]>([])
   const [devices, setDevices] = useState<DeviceEntry[]>([])
   const [performanceStats, setPerformanceStats] = useState<PerformanceStats>({ reviews: 0, approvals: 0, approvalRate: 0 })
@@ -255,7 +262,9 @@ export default function Profile() {
         setTwoFactorEnabled(data.twoFactorEnabled)
       })
       .catch(() => {})
-    api.get<ActivityLogEntry[]>('/me/activity-logs').then(setActivityLogs).catch(() => {})
+    api.get<ActivityLogPage>(`/me/activity-logs?limit=${ACTIVITY_PAGE_SIZE}`)
+      .then(page => { setActivityLogs(page.items); setActivityCursor(page.nextCursor) })
+      .catch(err => setActivityError(apiErrorMessage(err, 'Could not load activity history.')))
     api.get<LoginHistoryEntry[]>('/me/login-history').then(setLoginHistoryEntries).catch(() => {})
     api.get<DeviceEntry[]>('/me/devices').then(setDevices).catch(() => {})
     api.get<Partial<typeof dataToggles>>('/me/privacy-settings')
@@ -356,16 +365,17 @@ export default function Profile() {
   const [departmentName, setDepartmentName] = useState('')
   const [departmentId, setDepartmentId] = useState('')
   const [auditTrail, setAuditTrail] = useState<AuditTrailEntry[] | null>(null)
+  const [auditTrailCursor, setAuditTrailCursor] = useState<ActivityLogCursor | null>(null)
+  const [auditTrailLoadingMore, setAuditTrailLoadingMore] = useState(false)
   const [auditTrailError, setAuditTrailError] = useState('')
-  const [trailShown, setTrailShown] = useState(ADMIN_TRAIL_STEP)
   const [syncing, setSyncing] = useState(false)
   const [syncedAt, setSyncedAt] = useState<number | null>(null)
   useEffect(() => { setPreciseRole(getPreciseRole() ?? 'STAFF') }, [])
   useEffect(() => {
     if (role !== 'admin') return
     // Admins see the whole system's recorded actions here (staff only ever see their own).
-    api.get<AuditTrailEntry[]>('/audit-trail?limit=25')
-      .then(rows => setAuditTrail(rows ?? []))
+    api.get<AuditTrailPage>(`/audit-trail?limit=${ADMIN_TRAIL_PAGE_SIZE}`)
+      .then(page => { setAuditTrail(page.items); setAuditTrailCursor(page.nextCursor) })
       .catch(err => { setAuditTrail([]); setAuditTrailError(apiErrorMessage(err, 'Could not load the audit trail.')) })
   }, [role])
   useEffect(() => {
@@ -381,13 +391,43 @@ export default function Profile() {
   const roleLabel = ROLE_LABEL[preciseRole]
   const roleAccessLabel = ROLE_ACCESS[preciseRole]
 
+  const loadMoreActivityLogs = async () => {
+    if (activityLoadingMore || !activityCursor) return
+    setActivityLoadingMore(true)
+    setActivityError('')
+    try {
+      const page = await api.get<ActivityLogPage>(`/me/activity-logs?limit=${ACTIVITY_PAGE_SIZE}&beforeTimestamp=${encodeURIComponent(activityCursor.timestamp)}&beforeId=${encodeURIComponent(activityCursor.id)}`)
+      setActivityLogs(current => [...current, ...page.items])
+      setActivityCursor(page.nextCursor)
+    } catch (err) {
+      setActivityError(apiErrorMessage(err, 'Could not load more activity. Please try again.'))
+    } finally {
+      setActivityLoadingMore(false)
+    }
+  }
+
+  const loadMoreAuditTrail = async () => {
+    if (auditTrailLoadingMore || !auditTrailCursor || !auditTrail) return
+    setAuditTrailLoadingMore(true)
+    setAuditTrailError('')
+    try {
+      const page = await api.get<AuditTrailPage>(`/audit-trail?limit=${ADMIN_TRAIL_PAGE_SIZE}&beforeTimestamp=${encodeURIComponent(auditTrailCursor.timestamp)}&beforeId=${encodeURIComponent(auditTrailCursor.id)}`)
+      setAuditTrail(current => [...(current ?? []), ...page.items])
+      setAuditTrailCursor(page.nextCursor)
+    } catch (err) {
+      setAuditTrailError(apiErrorMessage(err, 'Could not load more audit history. Please try again.'))
+    } finally {
+      setAuditTrailLoadingMore(false)
+    }
+  }
+
   /** "Sync Profile": re-reads profile, activity, and sign-in history from the server. */
   const syncProfile = async () => {
     setSyncing(true)
     try {
       const [profile, logs, logins] = await Promise.all([
         api.get<{ fullName: string; email: string; phone: string | null; jobTitle: string | null; employeeId: string; birthDate: string; twoFactorEnabled: boolean }>('/me/profile'),
-        api.get<ActivityLogEntry[]>('/me/activity-logs'),
+        api.get<ActivityLogPage>(`/me/activity-logs?limit=${ACTIVITY_PAGE_SIZE}`),
         api.get<LoginHistoryEntry[]>('/me/login-history'),
       ])
       setDisplayName(profile.fullName)
@@ -397,7 +437,9 @@ export default function Profile() {
       setEmployeeId(profile.employeeId)
       setBirthDate(profile.birthDate)
       setTwoFactorEnabled(profile.twoFactorEnabled)
-      setActivityLogs(logs)
+      setActivityLogs(logs.items)
+      setActivityCursor(logs.nextCursor)
+      setActivityError('')
       setLoginHistoryEntries(logins)
       setSyncedAt(Date.now())
       setTimeout(() => setSyncedAt(null), 2500)
@@ -409,23 +451,35 @@ export default function Profile() {
   }
 
   /** "Download Data Log": the signed-in person's own audit entries as CSV. */
-  const downloadDataLog = () => {
-    const rows = activityLogs.map(log => ({
-      timestamp: formatAuditTimestamp(log.time),
-      user: employeeId,
-      role: roleLabel,
-      action: auditActionCode(log),
-      resource: auditResource(log),
-      description: log.title,
-      ip_address: log.ip ?? '',
-    }))
-    const blob = new Blob([toCsv(rows)], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${employeeId || 'my'}-data-log.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  const downloadDataLog = async () => {
+    setActivityError('')
+    try {
+      const allLogs = [...activityLogs]
+      let cursor = activityCursor
+      while (cursor) {
+        const page = await api.get<ActivityLogPage>(`/me/activity-logs?limit=${ACTIVITY_PAGE_SIZE}&beforeTimestamp=${encodeURIComponent(cursor.timestamp)}&beforeId=${encodeURIComponent(cursor.id)}`)
+        allLogs.push(...page.items)
+        cursor = page.nextCursor
+      }
+      const rows = allLogs.map(log => ({
+        timestamp: formatAuditTimestamp(log.time),
+        user: employeeId,
+        role: roleLabel,
+        action: auditActionCode(log),
+        resource: auditResource(log),
+        description: log.title,
+        ip_address: log.ip ?? '',
+      }))
+      const blob = new Blob([toCsv(rows)], { type: 'text/csv' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${employeeId || 'my'}-data-log.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setActivityError(apiErrorMessage(err, 'Could not download the complete activity log. Please try again.'))
+    }
   }
 
   const handleSave = async () => {
@@ -449,6 +503,18 @@ export default function Profile() {
   }
 
   const closeModal = () => { setActiveModal(null); setPrivacyView('list') }
+
+  useEffect(() => {
+    if (!activeModal) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveModal(null)
+        setPrivacyView('list')
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [activeModal])
 
   let pinErrorMessage = ''
   if (!newPin || !confirmPin) pinErrorMessage = '*Please fill in all fields.'
@@ -1224,7 +1290,7 @@ export default function Profile() {
               names protections the system doesn't have (consent tracking, an encryption key ID, a SHA-256
               ledger, cryptographic signing), the same spot states what is actually true instead. */}
           <motion.div custom={0} variants={fadeRise} initial="hidden" animate="visible"
-            style={{ background: '#fff', borderRadius: 18, padding: '26px 30px', boxShadow: '0 4px 8px rgba(15,23,42,0.2)' }}
+            style={{ background: '#fff', borderRadius: 18, border: '1px solid #e5e9f0', padding: '26px 30px' }}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, height: 28, padding: '0 16px 0 12px', borderRadius: 999, background: '#f5e4ff', color: '#59197a', fontSize: 12, fontWeight: 600 }}>
               <ShieldCheck size={14} strokeWidth={2.4} aria-hidden="true" /> Profile &amp; Privacy Governance
@@ -1348,7 +1414,7 @@ export default function Profile() {
           {/* The mockup's audit table. Staff see only their own recorded actions; the administrator sees the whole
               system's (GET /audit-trail), which is what the mockup's multi-user rows show. */}
           <motion.div custom={6} variants={fadeRise} initial="hidden" animate="visible"
-            style={{ marginTop: 24, background: '#fff', borderRadius: 16, border: '1px solid #e5e9f0', boxShadow: '0 4px 8px rgba(15,23,42,0.14)', overflow: 'hidden' }}
+            style={{ marginTop: 24, background: '#fff', borderRadius: 16, border: '1px solid #e5e9f0', overflow: 'hidden' }}
           >
             <div style={{ padding: '20px 24px 14px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
               <div>
@@ -1359,9 +1425,9 @@ export default function Profile() {
                   {role === 'admin' ? 'Recent recorded actions across the system, from the append-only audit log' : 'Your own recorded actions, from the system\u2019s append-only audit log'}
                 </div>
               </div>
-              {role !== 'admin' && activityLogs.length > AUDIT_ROWS_SHOWN && (
+              {role !== 'admin' && (activityLogs.length > AUDIT_ROWS_SHOWN || Boolean(activityCursor)) && (
                 <button onClick={() => setActiveModal('activity')} style={{ background: 'none', border: 'none', color: '#047857', fontFamily: 'Poppins,sans-serif', fontSize: 13, fontWeight: 600, cursor: 'pointer', minHeight: 36 }}>
-                  View all {activityLogs.length} →
+                  View all {activityCursor ? `${activityLogs.length}+` : activityLogs.length} →
                 </button>
               )}
             </div>
@@ -1381,7 +1447,7 @@ export default function Profile() {
                 </thead>
                 <tbody>
                   {role === 'admin'
-                    ? (auditTrail ?? []).slice(0, trailShown).map((e, i) => {
+                    ? (auditTrail ?? []).map((e, i) => {
                         const asLog: ActivityLogEntry = { title: e.title, time: e.time, ip: null, action: e.action, entityType: e.entityType, entityRef: e.entityRef }
                         return (
                           <tr key={`${e.time}-${i}`} style={{ height: 54, borderTop: '1px solid #eef1f5', fontSize: 13, color: '#4b5563', letterSpacing: '0.02em' }}>
@@ -1411,13 +1477,14 @@ export default function Profile() {
             {role === 'admin' && auditTrailError && <div role="alert" style={{ padding: '16px 24px', fontSize: 13, fontWeight: 600, color: '#b42318' }}>{auditTrailError}</div>}
             {role === 'admin' && auditTrail === null && <div role="status" style={{ padding: '24px', textAlign: 'center', fontSize: 13, color: '#5f6b7d' }}>Loading the audit trail…</div>}
             {role === 'admin' && auditTrail !== null && auditTrail.length === 0 && !auditTrailError && <div style={{ padding: '28px 24px', textAlign: 'center', fontSize: 13, color: '#5f6b7d' }}>No activity recorded yet.</div>}
-            {role === 'admin' && auditTrail !== null && auditTrail.length > trailShown && (
+            {role === 'admin' && Boolean(auditTrailCursor) && (
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '14px 24px', borderTop: '1px solid #eef1f5' }}>
-                <span style={{ fontSize: 13, color: '#55667e' }}>Showing {trailShown} of {auditTrail.length}</span>
-                <button onClick={() => setTrailShown(n => n + ADMIN_TRAIL_STEP)} style={{ minHeight: 40, padding: '0 18px', border: '1px solid #d5dce6', borderRadius: 10, background: '#fff', color: '#1f3151', fontFamily: 'Poppins,sans-serif', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Show more</button>
+                <span style={{ fontSize: 13, color: '#55667e' }}>Showing {auditTrail?.length ?? 0} recorded entries</span>
+                <button onClick={loadMoreAuditTrail} disabled={auditTrailLoadingMore} style={{ minHeight: 40, padding: '0 18px', border: '1px solid #d5dce6', borderRadius: 10, background: '#fff', color: '#1f3151', fontFamily: 'Poppins,sans-serif', fontSize: 13, fontWeight: 600, cursor: auditTrailLoadingMore ? 'wait' : 'pointer' }}>{auditTrailLoadingMore ? 'Loading…' : 'Load more'}</button>
               </div>
             )}
-            {role !== 'admin' && activityLogs.length === 0 && (
+            {role === 'staff' && activityError && <div role="alert" style={{ padding: '12px 24px', fontSize: 13, color: '#b42318' }}>{activityError}</div>}
+            {role !== 'admin' && activityLogs.length === 0 && !activityError && (
               <div style={{ padding: '28px 24px', textAlign: 'center', fontSize: 13, color: '#5f6b7d' }}>No activity recorded yet.</div>
             )}
           </motion.div>
@@ -1512,24 +1579,58 @@ export default function Profile() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-              style={{ background: '#fff', borderRadius: 24, width: '100%', maxWidth: 360, padding: 22, boxShadow: '0 24px 48px rgba(0,0,0,0.2)', maxHeight: '80vh', overflowY: 'auto' }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="profile-modal-title"
+              tabIndex={-1}
+              style={{
+                background: '#fff',
+                borderRadius: 24,
+                width: activeModal === 'activity' ? 'calc(100vw - 48px)' : '100%',
+                maxWidth: activeModal === 'activity' ? 1600 : 360,
+                padding: activeModal === 'activity' ? 0 : 22,
+                boxShadow: '0 24px 48px rgba(0,0,0,0.2)',
+                maxHeight: activeModal === 'activity' ? 'min(88vh, 760px)' : '80vh',
+                overflow: activeModal === 'activity' ? 'hidden' : 'auto',
+                display: activeModal === 'activity' ? 'flex' : undefined,
+                flexDirection: activeModal === 'activity' ? 'column' : undefined,
+              }}
               onClick={e => e.stopPropagation()}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+                marginBottom: activeModal === 'activity' ? 0 : 20,
+                padding: activeModal === 'activity' ? '20px 22px 16px' : 0,
+                borderBottom: activeModal === 'activity' ? '1px solid #e2e8f0' : 'none',
+                flexShrink: 0,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {activeModal === 'privacy' && privacyView !== 'list' && (
                     <button onClick={() => setPrivacyView('list')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#1f3151', width: 44, height: 44, marginLeft: -12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <ChevronLeft size={18} />
                     </button>
                   )}
-                  <span style={{ fontFamily: 'Poppins,sans-serif', fontSize: 16, fontWeight: 800, color: '#1f3151', letterSpacing: '0.02em' }}>
-                    {activeModal === 'activity' && 'ACTIVITY LOGS'}
+                  <span id="profile-modal-title" style={{ fontFamily: 'Poppins,sans-serif', fontSize: 16, fontWeight: 800, color: '#1f3151', letterSpacing: '0.02em' }}>
+                    {activeModal === 'activity' && 'SYSTEM ACTIVITY & AUDIT TRAIL'}
                     {activeModal === 'privacy' && privacyViewTitle[privacyView]}
                     {activeModal === 'account' && 'ACCOUNT SETTINGS'}
                     {activeModal === 'changeRequests' && 'REQUEST A CHANGE'}
                     {activeModal === 'password' && 'CHANGE PASSWORD'}
                     {activeModal === '2fa' && 'TWO-FACTOR AUTHENTICATION'}
                   </span>
+                  {activeModal === 'activity' && (
+                    <span style={{ borderRadius: 999, background: '#f1f5f9', padding: '4px 9px', color: '#5f6b7d', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      {activityCursor ? `${activityLogs.length}+ loaded` : `${activityLogs.length} total`}
+                    </span>
+                  )}
+                  {activeModal === 'activity' && (
+                    <span style={{ flexBasis: '100%', fontSize: 12, color: '#5e6d85', lineHeight: 1.4 }}>
+                      Your own recorded actions, from the system&apos;s append-only audit log
+                    </span>
+                  )}
                 </div>
                 <button onClick={closeModal} aria-label="Close" style={{ width: 44, height: 44, borderRadius: '50%', background: '#f1f5f9', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5f6b7d', flexShrink: 0 }}>
                   <X size={14} />
@@ -1537,18 +1638,39 @@ export default function Profile() {
               </div>
 
               {activeModal === 'activity' && (
-                <div>
-                  {activityLogs.map((log, i) => (
-                    <div key={i} style={{ display: 'flex', gap: 10, padding: '14px 0', borderTop: i > 0 ? '1px solid #e2e8f0' : 'none' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#008541', flexShrink: 0, marginTop: 5 }} />
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#1f3151', marginBottom: 3 }}>{log.title}</div>
-                        <div style={{ fontSize: 12, color: '#5f6b7d' }}>{formatLogTime(log.time)}</div>
-                      </div>
+                <div role="region" aria-label="All account activity" tabIndex={0} style={{ overflow: 'auto', minHeight: 0, flex: '1 1 auto', overscrollBehavior: 'contain' }}>
+                  <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                    <caption className="sr-only">All of your recorded account activity</caption>
+                    <colgroup>{AUDIT_COLUMNS.map(c => <col key={c.label} style={{ width: c.width }} />)}</colgroup>
+                    <thead>
+                      <tr style={{ background: '#f4f7fb', height: 50 }}>
+                        {AUDIT_COLUMNS.map((c, i) => (
+                          <th key={c.label} scope="col" style={{ textAlign: 'left', padding: i === 0 ? '0 12px 0 24px' : '0 12px', fontSize: 13, fontWeight: 600, color: '#1a2b41', letterSpacing: '0.04em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>{c.icon}{c.label}</span>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activityLogs.map((log, i) => (
+                        <tr key={`${log.time}-${log.title}-${i}`} style={{ height: 50, borderTop: '1px solid #eef1f5', fontSize: 13, color: '#4b5563', letterSpacing: '0.02em' }}>
+                          <td style={{ padding: '0 12px 0 24px', whiteSpace: 'nowrap' }}>{formatAuditTimestamp(log.time)}</td>
+                          <td style={{ padding: '0 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{employeeId}</td>
+                          <td style={{ padding: '0 12px', whiteSpace: 'nowrap' }}>{roleLabel}</td>
+                          <td title={log.title} style={{ padding: '0 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{auditActionCode(log)}</td>
+                          <td style={{ padding: '0 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{auditResource(log)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {activityLogs.length === 0 && !activityError && (
+                    <div style={{ textAlign: 'center', color: '#5f6b7d', fontSize: 13, padding: '28px 24px' }}>No activity recorded yet.</div>
+                  )}
+                  {activityError && <div role="alert" style={{ padding: '12px 24px', color: '#b42318', fontSize: 13 }}>{activityError}</div>}
+                  {Boolean(activityCursor) && (
+                    <div style={{ display: 'flex', justifyContent: 'center', padding: 16, borderTop: '1px solid #eef1f5' }}>
+                      <button onClick={loadMoreActivityLogs} disabled={activityLoadingMore} style={{ minHeight: 40, padding: '0 18px', border: '1px solid #d5dce6', borderRadius: 10, background: '#fff', color: '#1f3151', fontFamily: 'Poppins,sans-serif', fontSize: 13, fontWeight: 600, cursor: activityLoadingMore ? 'wait' : 'pointer' }}>{activityLoadingMore ? 'Loading…' : 'Load more activity'}</button>
                     </div>
-                  ))}
-                  {activityLogs.length === 0 && (
-                    <div style={{ textAlign: 'center', color: '#5f6b7d', fontSize: 12, padding: '20px 0' }}>No activity yet.</div>
                   )}
                 </div>
               )}

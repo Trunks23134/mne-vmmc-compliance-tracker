@@ -213,7 +213,7 @@ Three roles exist system-wide: `STAFF`, `UNIT_HEAD`, `ADMIN`. The frontend and b
 
 - **Transport & at-rest encryption:** TLS in transit (Supabase's managed endpoints + this app's own HTTPS-capable deployment), AES-256 at rest — both are Supabase-managed-Postgres platform guarantees, not something this codebase implements itself.
 - **RBAC everywhere**, enforced server-side only (§5).
-- **Immutable audit trail:** every request gets an actor/action/entity/IP/user-agent/timestamp row in `audit_logs`, and both `audit_logs` and the M&E `events` table are **append-only at the database level** — a Postgres trigger rejects `UPDATE`/`DELETE` outright, not just "the app doesn't do that."
+- **Immutable audit trail:** authenticated API requests and explicit authentication events are recorded with actor/action/entity/IP/user-agent/timestamp metadata; request and response bodies are never stored. Role denials and failed handlers are recorded too. Health/docs routes and anonymous non-auth requests are outside this coverage. Both `audit_logs` and the M&E `events` table are **append-only at the database level** — a Postgres trigger rejects `UPDATE`/`DELETE` outright, not just "the app doesn't do that."
 - **PHI-conscious logging:** the audit interceptor and the global exception filter both deliberately log only metadata (who, what action, what path) — never request/response bodies, which is where exam results and contact info would otherwise leak into logs.
 - **Upload gateway:** magic-byte file-type sniffing (never trusts client-supplied mimetype/extension) + a hard 5MB cap, before anything touches storage.
 - **PIN/password:** bcrypt-hashed PINs, real Supabase Auth-backed passwords (never stored by this app directly).

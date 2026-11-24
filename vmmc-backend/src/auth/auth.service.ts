@@ -271,6 +271,13 @@ export class AuthService {
     };
     const emailResult = await this.emailChannel.send(employee.email, accountEmail.subject, accountEmail.text, accountEmail.html);
 
+    await this.auditService.log({
+      actorId: employee.id,
+      action: 'ACCOUNT_CREATED',
+      entityType: 'auth',
+      entityId: employee.id,
+    });
+
     return {
       employeeId: assignedEmployeeId,
       emailStatus: emailResult.status,
@@ -292,7 +299,10 @@ export class AuthService {
       email: employee.email,
       password: currentPassword,
     });
-    if (error) throw new UnauthorizedException('Current password is incorrect.');
+    if (error) {
+      await this.auditService.log({ actorId: employee.id, action: 'PASSWORD_CHANGE_FAILED', entityType: 'auth', entityId: employee.id });
+      throw new UnauthorizedException('Current password is incorrect.');
+    }
 
     const { error: updateError } = await this.supabaseService.getClient().auth.admin.updateUserById(employee.auth_user_id!, {
       password: newPassword,
@@ -306,11 +316,24 @@ export class AuthService {
       .eq('id', employee.id);
     if (markError) throw new BadRequestException(markError.message);
 
+    await this.auditService.log({
+      actorId: employee.id,
+      action: 'PASSWORD_CHANGED',
+      entityType: 'auth',
+      entityId: employee.id,
+    });
+
     return { message: 'Password updated. You can now sign in with your new password.' };
   }
 
   async forgotPassword(contact: string) {
     const employee = await this.findEmployeeByContact(contact);
+    await this.auditService.log({
+      actorId: employee?.id ?? null,
+      action: 'PASSWORD_RESET_REQUESTED',
+      entityType: 'auth',
+      entityId: employee?.id ?? null,
+    });
 
     // Always return the same generic response — don't reveal whether the contact matched an account.
     if (!employee) return { message: 'If that account exists, a code has been sent.' };
@@ -342,7 +365,10 @@ export class AuthService {
 
   async verifyOtp(contact: string, otp: string) {
     const employee = await this.findEmployeeByContact(contact);
-    if (!employee) throw new BadRequestException('Invalid or expired code.');
+    if (!employee) {
+      await this.auditService.log({ actorId: null, action: 'PASSWORD_RESET_OTP_FAILED', entityType: 'auth' });
+      throw new BadRequestException('Invalid or expired code.');
+    }
 
     const { data, error } = await this.supabaseService
       .getClient()
@@ -353,13 +379,20 @@ export class AuthService {
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (error || !data) throw new BadRequestException('Invalid or expired code.');
+    if (error || !data) {
+      await this.auditService.log({ actorId: employee.id, action: 'PASSWORD_RESET_OTP_FAILED', entityType: 'auth', entityId: employee.id });
+      throw new BadRequestException('Invalid or expired code.');
+    }
 
     if (new Date(data.expires_at).getTime() < Date.now()) {
+      await this.auditService.log({ actorId: employee.id, action: 'PASSWORD_RESET_OTP_FAILED', entityType: 'auth', entityId: employee.id });
       throw new BadRequestException('Invalid or expired code.');
     }
     const matches = await bcrypt.compare(otp, data.otp_hash);
-    if (!matches) throw new BadRequestException('Invalid or expired code.');
+    if (!matches) {
+      await this.auditService.log({ actorId: employee.id, action: 'PASSWORD_RESET_OTP_FAILED', entityType: 'auth', entityId: employee.id });
+      throw new BadRequestException('Invalid or expired code.');
+    }
 
     await this.supabaseService
       .getClient()
@@ -371,6 +404,12 @@ export class AuthService {
       { sub: employee.id, purpose: RESET_TOKEN_PURPOSE },
       { secret: this.configService.getOrThrow<string>('RESET_TOKEN_SECRET'), expiresIn: RESET_TOKEN_TTL },
     );
+    await this.auditService.log({
+      actorId: employee.id,
+      action: 'PASSWORD_RESET_OTP_VERIFIED',
+      entityType: 'auth',
+      entityId: employee.id,
+    });
     return { resetToken };
   }
 
@@ -400,22 +439,35 @@ export class AuthService {
     });
     if (error) throw new BadRequestException(error.message);
 
+    await this.auditService.log({
+      actorId: employee.id,
+      action: 'PASSWORD_RESET',
+      entityType: 'auth',
+      entityId: employee.id,
+    });
+
     return { message: 'Password updated.' };
   }
 
-  async logout(accessToken: string) {
+  async logout(accessToken: string, actorId: string, context: { ipAddress: string | null; userAgent: string | null }) {
     try {
       await this.supabaseService.getClient().auth.admin.signOut(accessToken, 'global');
     } catch {
       // Token may already be expired/invalid — logout is best-effort either way.
     }
+    await this.auditService.log({
+      actorId,
+      action: 'LOGOUT',
+      entityType: 'auth',
+      entityId: actorId,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
+    });
     return { message: 'Logged out.' };
   }
 
-  /** `actorId` is null when the employee ID itself didn't resolve to anyone — there's no one
-   * to attribute the attempt to, but the attempted ID/reason are still recorded in `after` so
-   * the raw audit trail captures it even though it can never surface in that employee's own
-   * Activity Logs (ActivityService.listActivityLogs filters by actor_id). */
+  /** `actorId` is null when the employee ID didn't resolve, so the attempt is visible only in
+   * the system-wide trail and cannot be attributed to an employee's personal activity feed. */
   private async logLoginFailure(
     actorId: string | null,
     context: { ipAddress: string | null; userAgent: string | null },

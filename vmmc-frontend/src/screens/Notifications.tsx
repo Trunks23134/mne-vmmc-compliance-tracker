@@ -6,7 +6,7 @@ import { AlertTriangle, Bell, Check, List, MessageCircle, RefreshCw, Send, Siren
 import { fadeRise } from '@/lib/motion'
 import { api, ApiError, ApiConnectionError } from '@/lib/api'
 import { getPreciseRole } from '@/lib/auth'
-import { deliverySummary, eventTitle, formatStamp, NOTIFICATION_KIND, timeAgo, type DeliveryTone, type NotificationItem, type NotificationLogEntry } from '@/lib/notifications'
+import { deliverySummary, eventTitle, formatStamp, NOTIFICATION_KIND, NOTIFICATIONS_READ_EVENT, timeAgo, type DeliveryTone, type NotificationItem, type NotificationLogEntry } from '@/lib/notifications'
 
 interface Escalation {
   id: string
@@ -199,7 +199,32 @@ export default function Notifications() {
   useEffect(() => { setIsAdmin(getPreciseRole() === 'ADMIN') }, [])
 
   useEffect(() => {
-    api.get<NotificationItem[]>('/me/notifications').then((d) => setItems(d ?? [])).catch((e) => { setItems([]); setItemsError(apiMessage(e, 'Could not load your notifications.')) })
+    let active = true
+    const loadNotifications = async () => {
+      try {
+        const data = (await api.get<NotificationItem[]>('/me/notifications')) ?? []
+        if (!active) return
+        setItems(data)
+        if (!data.some((notification) => !notification.readAt)) return
+
+        try {
+          const result = await api.patch<{ readAt: string }>('/me/notifications/read')
+          if (!active) return
+          setItems((current) => (current ?? []).map((notification) => ({ ...notification, readAt: notification.readAt ?? result.readAt })))
+          window.dispatchEvent(new Event(NOTIFICATIONS_READ_EVENT))
+        } catch (error) {
+          if (active) setItemsError(apiMessage(error, 'Could not mark notifications as read. Please try again.'))
+        }
+      } catch (error) {
+        if (active) {
+          setItems([])
+          setItemsError(apiMessage(error, 'Could not load your notifications.'))
+        }
+      }
+    }
+
+    void loadNotifications()
+    return () => { active = false }
   }, [])
 
   useEffect(() => {

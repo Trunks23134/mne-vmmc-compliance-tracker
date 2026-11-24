@@ -16,6 +16,6 @@ export class AuditTrailController {
 
   @Get()
   list(@Query() query: TrailQueryDto) {
-    return this.auditTrailService.list(query.limit ?? DEFAULT_TRAIL_LIMIT);
+    return this.auditTrailService.list(query.limit ?? DEFAULT_TRAIL_LIMIT, query.beforeTimestamp, query.beforeId);
   }
 }
